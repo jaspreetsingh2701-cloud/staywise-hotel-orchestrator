@@ -1,0 +1,41 @@
+{
+  "name": "staywise-hotel-orchestrator",
+  "version": "1.0.0",
+  "description": "A backend service that aggregates hotel offers from multiple suppliers, compares prices, and returns the best available offer for each hotel.",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jaspreetsingh2701-cloud/staywise-hotel-orchestrator.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/jaspreetsingh2701-cloud/staywise-hotel-orchestrator/issues"
+  },
+  "homepage": "https://github.com/jaspreetsingh2701-cloud/staywise-hotel-orchestrator#readme",
+  "dependencies": {
+    "@temporalio/client": "^1.26.0",
+    "@temporalio/worker": "^1.26.0",
+    "@temporalio/workflow": "^1.26.0",
+    "dotenv": "^18.0.10",
+    "express": "^5.3.0",
+    "redis": "^6.3.1"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.6.6",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}
