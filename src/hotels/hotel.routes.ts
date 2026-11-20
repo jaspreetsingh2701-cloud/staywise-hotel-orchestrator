@@ -64,11 +64,7 @@ export function createHotelRouter(repository: HotelRepository) {
         maxPrice,
       });
 
-      return res.status(200).json({
-        city,
-        count: hotels.length,
-        hotels,
-      });
+      return res.status(200).json(hotels);
     } catch (error) {
       console.error("Hotel search failed:", error);
 

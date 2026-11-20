@@ -1,4 +1,5 @@
 import type { RedisClientType } from "redis";
+import { normalizeHotelName } from "../utils/normalize-hotel-name";
 
 export interface HotelOffer {
   name: string;
@@ -17,11 +18,6 @@ const CACHE_TTL_SECONDS = 300;
 export class HotelRepository {
   constructor(private readonly redis: RedisClientType) {}
 
-  // Converts a hotel name into a consistent Redis identifier.
-  private normalizeHotelName(name: string): string {
-    return name.trim().toLowerCase().replace(/\s+/g, "-");
-  }
-
   // Stores hotel prices in a Sorted Set and details in a Hash.
   async saveHotels(city: string, hotels: HotelOffer[]): Promise<void> {
     const normalizedCity = city.trim().toLowerCase();
@@ -38,12 +34,12 @@ export class HotelRepository {
     if (hotels.length > 0) {
       const priceEntries = hotels.map((hotel) => ({
         score: hotel.price,
-        value: this.normalizeHotelName(hotel.name),
+        value: normalizeHotelName(hotel.name),
       }));
 
       const hotelDetails = Object.fromEntries(
         hotels.map((hotel) => [
-          this.normalizeHotelName(hotel.name),
+          normalizeHotelName(hotel.name),
           JSON.stringify(hotel),
         ]),
       );
