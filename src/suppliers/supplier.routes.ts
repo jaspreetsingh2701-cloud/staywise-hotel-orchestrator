@@ -37,6 +37,12 @@ router.get("/supplierB/hotels", (req, res) => {
   );
 
   return res.json(hotels);
+  // Temporarily simulate Supplier B failure
+  // rebuild and recreate only the API
+  // docker compose up -d --build --force-recreate api
+  // return res.status(503).json({
+  //   error: "Simulated Supplier B outage",
+  // });
 });
 
 export default router;
