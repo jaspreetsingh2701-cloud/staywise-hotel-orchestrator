@@ -1,4 +1,3 @@
-
 # Project Specification – StayWise
 
 ## 1. Overview
@@ -13,7 +12,7 @@ The application uses:
 - Docker Compose to run the application and supporting services.
 - Vitest for automated testing.
 
-The objective is to demonstrate backend API development, workflow orchestration, concurrent supplier integration, data aggregation, caching, concurrency handling, and automated testing.
+The objective is to demonstrate backend API development, workflow orchestration, concurrent supplier integration, data aggregation, caching, concurrency handling, failure handling, and automated testing.
 
 ## 2. Objectives
 
@@ -28,6 +27,7 @@ The objective is to demonstrate backend API development, workflow orchestration,
 - Handle supplier and infrastructure failures.
 - Prevent duplicate supplier workflows for concurrent requests for the same city.
 - Provide a Docker-based environment.
+- Provide a Postman collection and an interactive API testing console.
 
 ## 3. Technology Stack
 
@@ -41,6 +41,8 @@ The objective is to demonstrate backend API development, workflow orchestration,
 | Docker | Containerization |
 | Docker Compose | Service orchestration |
 | Vitest | Automated testing |
+| Postman | API testing |
+| Next.js | Separate interactive API testing console |
 
 ## 4. API Requirements
 
@@ -59,7 +61,11 @@ Query parameters:
 | `minPrice` | No | Minimum acceptable price |
 | `maxPrice` | No | Maximum acceptable price |
 
-Price filters must be valid non-negative numbers. The minimum price cannot exceed the maximum price.
+Validation rules:
+
+- City is required and cannot be blank.
+- Price filters must be valid non-negative numbers.
+- Minimum price cannot exceed maximum price.
 
 ### Mock Supplier APIs
 
@@ -68,7 +74,7 @@ Price filters must be valid non-negative numbers. The minimum price cannot excee
 | GET | `/supplierA/hotels?city=delhi` | Mock Supplier A |
 | GET | `/supplierB/hotels?city=delhi` | Mock Supplier B |
 
-Both supplier APIs accept a city query parameter.
+Both supplier APIs accept a city query parameter and return static hotel offer data.
 
 ### Health API
 
@@ -78,7 +84,7 @@ Both supplier APIs accept a city query parameter.
 
 ### Response Format
 
-The hotel search endpoint returns a JSON array of hotel offers.
+The hotel search endpoint returns a bare JSON array of hotel offers.
 
 Each hotel contains:
 
@@ -106,6 +112,8 @@ Example:
 ]
 ```
 
+The response does not include an additional `city`, `count`, or `hotels` wrapper.
+
 ## 5. End-to-End Workflow
 
 The implemented hotel search workflow is:
@@ -118,12 +126,14 @@ The implemented hotel search workflow is:
 6. If a cached snapshot exists, Redis applies the requested price filters.
 7. If no cached snapshot exists, the service starts a Temporal workflow.
 8. Temporal executes Supplier A and Supplier B activities concurrently.
-9. Both supplier responses are combined.
-10. Hotels are deduplicated by normalized name.
-11. The lowest-priced offer is selected for each hotel.
-12. Aggregated results are stored in Redis.
-13. Redis applies the requested price filters.
-14. The final hotel list is returned to the client.
+9. Each supplier activity uses the configured retry policy.
+10. The workflow evaluates both supplier results independently.
+11. Successful supplier responses are combined.
+12. Hotels are deduplicated by normalized name.
+13. The lowest-priced offer is selected for each hotel.
+14. Aggregated results are stored in Redis.
+15. Redis applies the requested price filters.
+16. The final hotel list is returned to the client.
 
 A cached empty result is considered a valid snapshot. The application does not repeatedly call suppliers when a previous search returned no hotels and its cache has not expired.
 
@@ -156,13 +166,14 @@ The application has the following components.
 - Orchestrates supplier API activities.
 - Executes supplier calls concurrently.
 - Configures activity retries.
-- Coordinates hotel aggregation through the workflow.
+- Coordinates supplier result handling and hotel aggregation through the workflow.
 
 ### Supplier Activities
 
 - Call the mock supplier endpoints.
 - Normalize supplier responses into the common hotel offer format.
 - Return supplier offers to the workflow.
+- Raise errors for unsuccessful supplier HTTP responses so Temporal can apply its retry policy.
 
 ### Hotel Aggregator
 
@@ -183,9 +194,57 @@ Temporal workers run separately from the Express API.
 
 External I/O, such as supplier HTTP requests, is handled inside Temporal activities. Workflow code coordinates the activities and aggregation.
 
-## 7. Request Coalescing: Design Decision
+## 7. Supplier Failure Handling
 
-### 7.1 Problem
+### Problem
+
+A supplier may become unavailable or return an unsuccessful HTTP response.
+
+Failing the entire hotel search when only one supplier is unavailable would discard valid offers from the other supplier.
+
+### Implementation
+
+The Temporal workflow uses `Promise.allSettled` to evaluate both supplier activities independently.
+
+The workflow handles the following scenarios:
+
+| Supplier A | Supplier B | Workflow Result |
+|---|---|---|
+| Success | Success | Aggregate both supplier responses |
+| Success | Failure | Aggregate Supplier A offers |
+| Failure | Success | Aggregate Supplier B offers |
+| Failure | Failure | Fail the workflow |
+
+### Retry Behavior
+
+Supplier activities are configured with:
+
+- `startToCloseTimeout`: 30 seconds.
+- `maximumAttempts`: 3.
+
+Temporal retries failed activities according to this policy.
+
+If one supplier continues failing after retries, the other supplier's successful results can still be returned.
+
+If both suppliers fail, the workflow throws an error. The API handles the failed search rather than saving a successful snapshot from the failed workflow.
+
+### Verification
+
+The partial failure scenario was verified using Docker:
+
+1. Supplier B was temporarily configured to return HTTP 503.
+2. The API service was rebuilt and recreated.
+3. Supplier A continued returning valid offers.
+4. The hotel search endpoint returned Supplier A's available hotels.
+5. Supplier B was restored.
+6. The API was rebuilt again.
+7. After clearing the Delhi cache, the next search returned the expected aggregated results from both suppliers.
+
+This verifies partial supplier failure handling and recovery through the Dockerized application.
+
+## 8. Request Coalescing: Design Decision
+
+### 8.1 Problem
 
 Before request coalescing, the API checked Redis for a city snapshot and started a Temporal workflow whenever the snapshot was missing.
 
@@ -201,7 +260,7 @@ For example:
 
 This results in unnecessary supplier calls, duplicate Temporal workflows, and competing cache refreshes.
 
-### 7.2 Options Evaluated
+### 8.2 Options Evaluated
 
 Two approaches were considered.
 
@@ -232,8 +291,6 @@ Limitation:
 - The in-memory Map is local to one API process.
 - Multiple API instances do not share their in-flight state.
 
-Estimated implementation effort: 30–45 minutes.
-
 #### Option B: Redis Distributed Lock
 
 Use Redis to coordinate cache refreshes across multiple API instances.
@@ -256,9 +313,7 @@ Trade-offs:
 - Requires handling contention, timeouts, and failed lock holders.
 - Requires additional tests for distributed lock behavior.
 
-Estimated implementation effort: 1–2 hours.
-
-### 7.3 Selected Approach: Option A
+### 8.3 Selected Approach: Option A
 
 Option A, in-process request coalescing, was selected.
 
@@ -273,7 +328,7 @@ Reasons:
 
 Option B remains a suitable future improvement if the API is deployed across multiple instances.
 
-### 7.4 Implementation
+### 8.4 Implementation
 
 The implementation is contained in:
 
@@ -295,10 +350,11 @@ The service:
 - Runs Temporal only when no cached snapshot exists.
 - Saves aggregated results to Redis.
 - Removes completed or failed promises in a `finally` block.
+- Uses a promise identity check during cleanup to avoid deleting a newer in-flight operation.
 
 The hotel router creates one `HotelSearchService` instance when the router is initialized. This allows incoming requests handled by the same API process to share the in-flight Map.
 
-### 7.5 Failure Handling
+### 8.5 Failure Handling
 
 If a Temporal workflow fails:
 
@@ -309,7 +365,7 @@ If a Temporal workflow fails:
 
 This prevents failed in-flight entries from blocking future searches.
 
-### 7.6 Known Limitation
+### 8.6 Known Limitation
 
 Request coalescing is currently process-local.
 
@@ -317,7 +373,7 @@ If the application is scaled to multiple API instances, each instance maintains 
 
 A Redis distributed lock or another distributed coordination mechanism would be appropriate in that deployment scenario.
 
-## 8. Redis Strategy
+## 9. Redis Strategy
 
 Redis stores aggregated hotel offers so subsequent API requests can retrieve results without repeatedly calling supplier APIs.
 
@@ -377,19 +433,19 @@ The repository keeps Redis-specific operations separate from API and supplier or
 
 ### Redis Configuration
 
+The application uses the following environment variable:
+
 | Variable | Purpose |
 |---|---|
-| `REDIS_URL` | Application Redis connection |
-| `REDIS_TEST_URL` | Separate Redis database used by integration tests |
+| `REDIS_URL` | Application Redis connection URL |
 
 Example:
 
 ```env
 REDIS_URL=redis://localhost:6379
-REDIS_TEST_URL=redis://localhost:6379/15
 ```
 
-## 9. Error Handling
+## 10. Error Handling
 
 The application includes:
 
@@ -398,11 +454,13 @@ The application includes:
 - Minimum and maximum price range validation.
 - Supplier HTTP error handling.
 - Temporal activity retry configuration.
+- Partial supplier failure handling.
+- Workflow failure when both suppliers fail.
 - Redis connection error logging.
 - API error responses and logging.
 - Cleanup of failed in-flight search operations.
 
-## 10. Docker Environment
+## 11. Docker Environment
 
 Docker Compose runs four services:
 
@@ -417,11 +475,142 @@ The API and worker use the same application image with separate startup commands
 
 The worker connects to Temporal using the `hotel-search` task queue. Supplier activities access the supplier endpoints through the Docker network.
 
-The Temporal development server UI is available at `http://localhost:8233`.
+The Temporal development server UI is available at:
+
+http://localhost:8233
 
 The current Temporal configuration is intended for local development and assignment demonstration, not production deployment.
 
-## 11. Testing Strategy
+### Docker Commands
+
+Check Docker installation:
+
+```bash
+docker --version
+docker compose version
+```
+
+Validate the Compose configuration:
+
+```bash
+docker compose config
+```
+
+Build and start all services:
+
+```bash
+docker compose up -d --build --force-recreate
+```
+
+Check service status:
+
+```bash
+docker compose ps
+```
+
+View all service logs:
+
+```bash
+docker compose logs --tail=50
+```
+
+Inspect Temporal worker logs:
+
+```bash
+docker compose logs worker --tail 50
+```
+
+Stop the environment:
+
+```bash
+docker compose down
+```
+
+### Redis Cache Inspection
+
+List Delhi cache keys:
+
+```bash
+docker exec staywise-redis redis-cli KEYS "staywise:hotels:delhi:*"
+```
+
+Clear the Delhi cache snapshot when intentionally testing a fresh search:
+
+```bash
+docker exec staywise-redis redis-cli DEL staywise:hotels:delhi:prices staywise:hotels:delhi:details staywise:hotels:delhi:metadata
+```
+
+### PowerShell API Verification
+
+Check application health:
+
+```powershell
+Invoke-RestMethod http://localhost:3000/health
+```
+
+Inspect the raw hotel response:
+
+```powershell
+$response = Invoke-WebRequest -UseBasicParsing "http://localhost:3000/api/hotels?city=delhi"
+$response.Content
+```
+
+Test price filtering:
+
+```powershell
+Invoke-RestMethod "http://localhost:3000/api/hotels?city=delhi&minPrice=5000&maxPrice=6000"
+```
+
+## 12. Interactive API Testing Console
+
+A separate Next.js application is available for manual API testing.
+
+Repository:
+
+https://github.com/jaspreetsingh2701-cloud/staywise-api-console
+
+The console is independent of the backend and provides a browser-based interface for:
+
+- Checking backend health.
+- Calling Supplier A and Supplier B independently.
+- Searching aggregated hotel offers.
+- Applying minimum and maximum price filters.
+- Testing empty results and invalid inputs.
+- Inspecting HTTP status, response time, and raw JSON.
+
+### Local Setup
+
+Start the backend using Docker Compose first.
+
+Clone the console repository:
+
+```bash
+git clone https://github.com/jaspreetsingh2701-cloud/staywise-api-console.git
+cd staywise-api-console
+npm install
+```
+
+Create `.env.local`:
+
+```env
+STAYWISE_API_URL=http://localhost:3000
+```
+
+Start the console on port 3001:
+
+```bash
+npm run dev -- --port 3001
+```
+
+Open:
+
+http://localhost:3001
+
+The console uses a Next.js server-side proxy to forward GET requests to the backend. This avoids requiring browser-side CORS configuration.
+
+The repository provides the console source code and local setup instructions. Public live testing requires a deployed console and a publicly reachable backend configured through `STAYWISE_API_URL`.
+
+## 13. Testing Strategy
 
 Automated tests are written using Vitest.
 
@@ -429,7 +618,8 @@ Automated tests are written using Vitest.
 
 - Select the cheapest duplicate offer.
 - Retain single-supplier hotels.
-- Match names case-insensitively and ignore surrounding whitespace.
+- Match names case-insensitively.
+- Ignore surrounding whitespace and normalize repeated whitespace.
 - Handle empty input.
 
 ### Redis Repository Tests
@@ -451,18 +641,27 @@ Automated tests are written using Vitest.
 - Verify that a failed workflow is removed from the in-flight Map and can be retried.
 - Verify that concurrent callers share workflow failures.
 
-The Temporal client is mocked in these tests, so the request-coalescing behavior can be verified without requiring a running Temporal server.
+### Temporal Workflow Tests
+
+- Both suppliers succeed and their offers are aggregated.
+- Supplier B fails while Supplier A results are retained.
+- Supplier A fails while Supplier B results are retained.
+- Both suppliers fail and the workflow throws an error.
+- Both suppliers return empty results.
+
+The Temporal workflow tests mock `@temporalio/workflow` activities so the workflow behavior can be verified independently.
 
 ### Current Test Results
 
-| Test area | Tests |
+| Test Area | Tests |
 |---|---:|
 | Hotel aggregation | 4 |
 | Redis repository | 9 |
 | Hotel search service | 5 |
-| **Total** | **18** |
+| Temporal workflow | 5 |
+| **Total** | **23** |
 
-All 18 tests passed during the latest verification.
+All 23 automated tests passed during the latest verification.
 
 The TypeScript build also completed successfully.
 
@@ -470,14 +669,19 @@ The TypeScript build also completed successfully.
 
 The Dockerized application has been verified for:
 
-- Successful hotel aggregation.
+- Successful API, Redis, Temporal, and worker startup.
+- Successful supplier API responses.
+- Correct hotel aggregation.
 - Duplicate hotel resolution.
 - Single-supplier hotel retention.
 - Combined minimum and maximum price filtering.
 - Empty filtered results.
-- API, Redis, Temporal, and worker startup.
+- Correct bare JSON array response format.
+- Partial Supplier B outage with Supplier A results retained.
+- Recovery after restoring Supplier B.
+- Fresh cache population after clearing the city snapshot.
 
-## 12. Development Milestones
+## 14. Development Milestones
 
 ### Completed
 
@@ -505,19 +709,34 @@ The Dockerized application has been verified for:
 - [x] Document Temporal development-mode configuration.
 - [x] Implement in-process request coalescing.
 - [x] Add request-coalescing tests.
-- [x] Verify TypeScript build and all 18 automated tests.
+- [x] Implement partial supplier failure handling.
+- [x] Add Temporal workflow tests.
+- [x] Verify supplier failure and recovery using Docker.
+- [x] Verify TypeScript build and all 23 automated tests.
+- [x] Add interactive API testing console repository.
 
 ### Remaining
 
-- [ ] Complete final review and merge the request-coalescing feature PR.
+- [ ] Final documentation review and submission verification.
 
-## 13. Implementation Guidelines
+## 15. Future Improvements
+
+The following are possible improvements beyond the current assignment scope:
+
+- Redis distributed locking for request coalescing across multiple API instances.
+- Supplier-specific health checks in the health endpoint.
+- Structured logging and centralized observability.
+- Production Temporal deployment with persistent storage.
+- More extensive integration and load testing.
+
+## 16. Implementation Guidelines
 
 - Use TypeScript interfaces for shared data structures.
 - Keep controllers focused on HTTP handling.
 - Keep external supplier I/O inside Temporal activities.
 - Ensure Temporal workflows remain deterministic.
 - Configure retries for supplier activities.
+- Handle supplier failures independently.
 - Perform price filtering inside Redis.
 - Use request coalescing to avoid duplicate workflows within an API process.
 - Keep comments focused on important business logic.
