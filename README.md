@@ -1,3 +1,4 @@
+
 # StayWise – Hotel Offer Orchestrator
 
 A backend service that aggregates hotel offers from multiple suppliers, compares prices, and returns the cheapest available offer for each hotel.
@@ -14,6 +15,8 @@ Built with Node.js, TypeScript, Express, Temporal, Redis, and Docker Compose.
 - Store aggregated results in Redis.
 - Filter hotels by minimum and maximum price directly inside Redis.
 - Cache hotel offers with a five-minute expiration.
+- Coalesce concurrent requests for the same city to prevent duplicate Temporal workflows.
+- Allow independent hotel searches for different cities.
 - Run the application and supporting services using Docker Compose.
 - Automated tests using Vitest.
 
@@ -163,16 +166,30 @@ Example response:
 The hotel search request follows this flow:
 
 1. Express receives and validates the request.
-2. Redis is checked for an existing city snapshot.
-3. On a cache miss, Express starts a Temporal workflow.
-4. Temporal executes both supplier activities concurrently.
-5. Supplier responses are combined and deduplicated.
-6. The cheapest offer is retained for each hotel.
-7. Aggregated offers are stored in Redis.
-8. Redis applies the requested price filters.
-9. Express returns the response.
+2. The hotel search service checks whether a refresh for the requested city is already in progress.
+3. Redis is checked for an existing city snapshot.
+4. If a snapshot exists, the cached results are used.
+5. On a cache miss, the service starts or joins an in-flight Temporal search for that city.
+6. Temporal executes both supplier activities concurrently.
+7. Supplier responses are combined and deduplicated.
+8. The cheapest offer is retained for each hotel.
+9. Aggregated offers are stored in Redis.
+10. Redis applies the requested price filters.
+11. Express returns the response.
 
 The Temporal worker runs separately from the API process.
+
+### Concurrent Request Handling
+
+The `HotelSearchService` uses an in-memory Map of promises to coordinate concurrent hotel searches.
+
+- Concurrent requests for the same city share one in-flight search.
+- Requests for different cities can execute independently.
+- Completed or failed searches are removed from the in-flight Map.
+- A failed search can be retried by a subsequent request.
+- Once a snapshot exists in Redis, subsequent requests use the cached result.
+
+This implementation uses in-process request coalescing. Each API process maintains its own in-flight Map; a distributed coordination mechanism would be needed if the API were deployed across multiple instances.
 
 ## Redis Implementation
 
@@ -227,6 +244,16 @@ Build the TypeScript application:
 npm run build
 ```
 
+The automated test suite covers:
+
+- Hotel aggregation and duplicate resolution.
+- Redis storage and price filtering.
+- Cached snapshot detection.
+- Concurrent request coalescing.
+- Independent searches for different cities.
+- Failed workflow cleanup and retry behavior.
+- Shared workflow failures across concurrent requests.
+
 ## Documentation
 
 See [Project Documentation](docs/PROJECT.md) for:
@@ -236,10 +263,11 @@ See [Project Documentation](docs/PROJECT.md) for:
 - API specifications.
 - Temporal orchestration.
 - Redis storage and price filtering.
+- Request coalescing design decision.
 - Docker environment.
 - Testing strategy.
 - Implementation status.
 
 ## Project Scope
 
-This project demonstrates backend development, API integration, caching, workflow orchestration, and containerization as part of a technical assignment.
+This project demonstrates backend development, API integration, caching, workflow orchestration, concurrency handling, and containerization as part of a technical assignment.
