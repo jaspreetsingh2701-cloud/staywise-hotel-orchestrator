@@ -1,10 +1,10 @@
 import { Router } from "express";
-
 import type { HotelRepository } from "../redis/hotel.repository";
-import { runHotelSearch } from "../temporal/temporal.client";
+import { HotelSearchService } from "./hotel-search.service";
 
 export function createHotelRouter(repository: HotelRepository) {
   const router = Router();
+  const hotelSearchService = new HotelSearchService(repository);
 
   router.get("/", async (req, res) => {
     const city =
@@ -52,12 +52,7 @@ export function createHotelRouter(repository: HotelRepository) {
     }
 
     try {
-      const hasSnapshot = await repository.hasSnapshot(city);
-
-      if (!hasSnapshot) {
-        const offers = await runHotelSearch(city);
-        await repository.saveHotels(city, offers);
-      }
+      await hotelSearchService.ensureSnapshot(city);
 
       const hotels = await repository.getHotels(city, {
         minPrice,
