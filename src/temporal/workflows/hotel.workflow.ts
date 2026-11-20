@@ -14,10 +14,25 @@ const { fetchSupplierAHotels, fetchSupplierBHotels } = proxyActivities<
 });
 
 export async function hotelSearchWorkflow(city: string): Promise<HotelOffer[]> {
-  const [supplierAHotels, supplierBHotels] = await Promise.all([
+  const [supplierAResult, supplierBResult] = await Promise.allSettled([
     fetchSupplierAHotels(city),
     fetchSupplierBHotels(city),
   ]);
+
+  const supplierAHotels =
+    supplierAResult.status === "fulfilled" ? supplierAResult.value : [];
+
+  const supplierBHotels =
+    supplierBResult.status === "fulfilled" ? supplierBResult.value : [];
+
+  if (
+    supplierAResult.status === "rejected" &&
+    supplierBResult.status === "rejected"
+  ) {
+    throw new Error(
+      `Both suppliers failed. Supplier A: ${String(supplierAResult.reason)}; Supplier B: ${String(supplierBResult.reason)}`,
+    );
+  }
 
   return aggregateHotels([...supplierAHotels, ...supplierBHotels]);
 }
