@@ -1,0 +1,64 @@
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: staywise-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  temporal:
+    image: temporalio/temporal:latest
+    container_name: staywise-temporal
+    command:
+      - server
+      - start-dev
+      - --ip
+      - 0.0.0.0
+    ports:
+      - "7233:7233"
+      - "8233:8233"
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: staywise-api
+    command: ["node", "dist/server.js"]
+    environment:
+      PORT: 3000
+      REDIS_URL: redis://redis:6379
+      TEMPORAL_ADDRESS: temporal:7233
+    ports:
+      - "3000:3000"
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://localhost:3000/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: staywise-worker
+    command: ["node", "dist/temporal/worker.js"]
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      SUPPLIER_API_URL: http://api:3000
+    depends_on:
+      api:
+        condition: service_healthy
+      temporal:
+        condition: service_started

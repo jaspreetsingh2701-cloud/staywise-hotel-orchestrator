@@ -3,6 +3,10 @@ dist/
 .env
 .DS_Store
 coverage/
-/# Local Postman workspace metadata
-/.postman/
-/postman/globals/
+
+# Local Postman workspace metadata
+.postman/
+postman/*
+
+# Keep the exported Postman collection in Git
+!postman/StayWise.postman_collection.json
