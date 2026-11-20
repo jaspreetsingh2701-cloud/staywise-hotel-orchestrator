@@ -9,6 +9,7 @@ The application uses:
 - Express.js to expose REST APIs.
 - Temporal to orchestrate supplier API calls.
 - Redis to store aggregated hotel offers and perform price-based filtering.
+- Docker Compose to run the application and supporting services.
 
 The objective is to demonstrate backend API development, workflow orchestration, concurrent supplier integration, data aggregation, caching, and automated testing.
 
@@ -21,9 +22,9 @@ The objective is to demonstrate backend API development, workflow orchestration,
 - Select the cheapest offer when the same hotel is available from multiple suppliers.
 - Retain hotels available from only one supplier.
 - Store aggregated results in Redis.
-- Support minimum and maximum price filtering.
+- Support minimum and maximum price filtering inside Redis.
 - Handle supplier and infrastructure failures.
-- Provide a Docker-based local development environment.
+- Provide a Docker-based environment.
 
 ## 3. Technology Stack
 
@@ -32,12 +33,11 @@ The objective is to demonstrate backend API development, workflow orchestration,
 | Node.js | Application runtime |
 | TypeScript | Application language |
 | Express.js | REST API framework |
-| Temporal.io | Workflow orchestration |
+| Temporal | Workflow orchestration |
 | Redis | Hotel offer storage and price filtering |
 | Docker | Containerization |
-| Docker Compose | Local service orchestration |
+| Docker Compose | Service orchestration |
 | Vitest | Automated testing |
-| Postman | API testing |
 
 ## 4. API Requirements
 
@@ -56,6 +56,8 @@ Query parameters:
 | `minPrice` | No | Minimum acceptable hotel price |
 | `maxPrice` | No | Maximum acceptable hotel price |
 
+Price filters must be valid non-negative numbers. The minimum price cannot exceed the maximum price.
+
 ### Mock Supplier APIs
 
 | Method | Endpoint | Description |
@@ -73,33 +75,22 @@ Both supplier APIs accept a city query parameter.
 
 ### Response Format
 
-Each hotel in the response should contain:
+The hotel search response contains:
+
+- `city`
+- `count`
+- `hotels`
+
+Each hotel contains:
 
 - `name`
 - `price`
 - `supplier`
 - `commissionPct`
 
-Example:
+## 5. End-to-End Workflow
 
-    [
-      {
-        "name": "Holtin",
-        "price": 5340,
-        "supplier": "Supplier B",
-        "commissionPct": 20
-      },
-      {
-        "name": "Radison",
-        "price": 5900,
-        "supplier": "Supplier A",
-        "commissionPct": 13
-      }
-    ]
-
-## 5. Target Workflow
-
-The intended end-to-end workflow is:
+The implemented hotel search workflow is:
 
 1. Client requests hotel offers for a city.
 2. Express validates the request and query parameters.
@@ -108,33 +99,46 @@ The intended end-to-end workflow is:
 5. If no cached snapshot exists, Express initiates a Temporal workflow.
 6. Temporal executes Supplier A and Supplier B activities concurrently.
 7. Both supplier responses are combined.
-8. Hotels are deduplicated by name.
+8. Hotels are deduplicated by normalized name.
 9. The lowest-priced offer is selected for each hotel.
 10. Aggregated results are stored in Redis.
 11. Redis applies the requested price filters.
 12. The final hotel list is returned to the client.
 
-A cached empty result is still considered a valid snapshot. The application should not repeatedly call suppliers when a previous search returned no hotels and its cache has not expired.
-
-The Temporal orchestration and API integration will be implemented in subsequent milestones.
+A cached empty result is considered a valid snapshot. The application does not repeatedly call suppliers when a previous search returned no hotels and its cache has not expired.
 
 ## 6. Architecture
 
-The application has three primary responsibilities.
+The application has the following components.
 
 ### Express API
 
 - Handles incoming HTTP requests.
 - Validates query parameters.
 - Coordinates the hotel search process.
+- Checks Redis for cached results.
+- Initiates Temporal workflows when required.
 - Returns appropriate HTTP responses.
 
 ### Temporal
 
 - Orchestrates supplier API activities.
 - Executes supplier calls concurrently.
-- Manages workflow execution and activity retries.
-- Coordinates the aggregation process.
+- Configures activity retries.
+- Coordinates hotel aggregation through the workflow.
+
+### Supplier Activities
+
+- Call the mock supplier endpoints.
+- Normalize supplier responses into the common hotel offer format.
+- Return supplier offers to the workflow.
+
+### Hotel Aggregator
+
+- Deduplicates hotels using normalized names.
+- Compares prices for duplicate hotels.
+- Retains the cheapest offer.
+- Preserves single-supplier hotels.
 
 ### Redis
 
@@ -144,33 +148,29 @@ The application has three primary responsibilities.
 - Performs minimum and maximum price filtering.
 - Identifies whether a cached snapshot exists.
 
-Temporal workflows and workers will run as separate processes.
+Temporal workers run separately from the Express API.
 
-External I/O, such as supplier HTTP requests and Redis operations, should be handled inside Temporal activities rather than workflow code.
-
-Workflows should remain deterministic, and activities should be safe to retry where practical.
+External I/O, such as supplier HTTP requests, is handled inside Temporal activities. Workflow code coordinates the activities and aggregation.
 
 ## 7. Redis Strategy
 
-Redis stores aggregated hotel offers so that subsequent API requests can retrieve results without repeatedly calling supplier APIs.
+Redis stores aggregated hotel offers so subsequent API requests can retrieve results without repeatedly calling supplier APIs.
 
 ### Data Structures
 
 The implementation uses three Redis keys per city:
 
 1. **Sorted Set (ZSET):** Stores normalized hotel names as members and hotel prices as scores.
-2. **Hash:** Stores complete hotel offer details as JSON, using the normalized hotel name as the field.
+2. **Hash:** Stores complete hotel offer details as JSON.
 3. **Metadata key:** Identifies whether a cached snapshot exists, including when the result contains zero hotels.
 
 Example Redis keys:
 
-    staywise:hotels:delhi:prices
-    staywise:hotels:delhi:details
-    staywise:hotels:delhi:metadata
-
-    staywise:hotels:mumbai:prices
-    staywise:hotels:mumbai:details
-    staywise:hotels:mumbai:metadata
+```text
+staywise:hotels:delhi:prices
+staywise:hotels:delhi:details
+staywise:hotels:delhi:metadata
+```
 
 ### Price Filtering
 
@@ -191,8 +191,8 @@ Each city has an independent cache.
 
 When a city is refreshed:
 
-1. The existing price index, hotel details, and metadata keys are deleted.
-2. The latest hotel offers are written to the Sorted Set and Hash.
+1. Existing price index, hotel details, and metadata keys are deleted.
+2. Latest hotel offers are written to the Sorted Set and Hash.
 3. A metadata marker is written to indicate that a snapshot exists.
 4. All snapshot keys receive a TTL of 300 seconds (5 minutes).
 
@@ -200,47 +200,93 @@ When the supplier search returns no hotels, the repository still writes the meta
 
 Redis transactions (`MULTI` / `EXEC`) group the refresh operations.
 
-The TTL provides a bounded cache lifetime and helps prevent indefinitely stale offers.
-
 ### Repository Responsibilities
 
 `HotelRepository` encapsulates Redis operations:
 
-- `saveHotels(city, hotels)` – stores or replaces a city's hotel offers.
-- `getHotels(city, filters)` – retrieves offers with optional Redis-side price filtering.
+- `saveHotels(city, hotels)` – stores or replaces hotel offers.
+- `getHotels(city, filters)` – retrieves hotel offers with optional Redis-side price filtering.
 - `hasSnapshot(city)` – checks whether a cached snapshot exists, including an empty result.
 
 The repository keeps Redis-specific operations separate from API and supplier orchestration logic.
 
 ### Redis Configuration
 
-Redis connection is configured through environment variables:
-
 | Variable | Purpose |
 |---|---|
 | `REDIS_URL` | Application Redis connection |
 | `REDIS_TEST_URL` | Separate Redis database used by integration tests |
 
-Example configuration:
+Example:
 
-    REDIS_URL=redis://localhost:6379
-    REDIS_TEST_URL=redis://localhost:6379/15
-
-The test database is isolated from the application database to avoid interfering with application data.
+```env
+REDIS_URL=redis://localhost:6379
+REDIS_TEST_URL=redis://localhost:6379/15
+```
 
 ## 8. Error Handling
 
-The application should:
+The application includes:
 
-- Validate required query parameters.
-- Reject invalid price ranges.
-- Handle supplier API failures.
-- Configure Temporal activity retries.
-- Handle Redis connection failures.
-- Return meaningful HTTP status codes and error messages.
-- Log relevant failures for debugging.
+- Required query parameter validation.
+- Non-negative numeric price validation.
+- Minimum and maximum price range validation.
+- Supplier HTTP error handling.
+- Temporal activity retry configuration.
+- Redis connection error logging.
+- API error responses and logging.
 
-## 9. Development Milestones
+## 9. Docker Environment
+
+Docker Compose runs four services:
+
+| Service | Responsibility |
+|---|---|
+| API | Express application |
+| Worker | Temporal workflow execution |
+| Redis | Hotel offer storage and price filtering |
+| Temporal | Workflow orchestration server |
+
+The API and worker use the same application image with separate startup commands.
+
+The worker connects to Temporal using the `hotel-search` task queue. Supplier activities access the supplier endpoints through the Docker network.
+
+The Temporal development server UI is available at `http://localhost:8233`.
+
+## 10. Testing Strategy
+
+Automated tests are written using Vitest.
+
+### Aggregator Tests
+
+- Select the cheapest duplicate offer.
+- Retain single-supplier hotels.
+- Match names case-insensitively and ignore surrounding whitespace.
+- Handle empty input.
+
+### Redis Repository Tests
+
+- Save and retrieve hotel offers.
+- Apply minimum price filtering.
+- Apply maximum price filtering.
+- Apply combined price filtering.
+- Handle empty search results.
+- Keep city data isolated.
+- Replace previously cached data during refresh.
+- Detect cache misses and cached empty snapshots.
+
+### Docker Integration Verification
+
+The Dockerized application has been verified for:
+
+- Successful hotel aggregation.
+- Duplicate hotel resolution.
+- Single-supplier hotel retention.
+- Combined minimum and maximum price filtering.
+- Empty filtered results.
+- API, Redis, Temporal, and worker startup.
+
+## 11. Development Milestones
 
 ### Completed
 
@@ -255,55 +301,26 @@ The application should:
 - [x] Implement cache refresh and expiration.
 - [x] Implement cached snapshot detection.
 - [x] Add Redis repository tests.
+- [x] Implement hotel aggregation and deduplication.
+- [x] Implement Temporal workflows and supplier activities.
+- [x] Execute supplier calls concurrently.
+- [x] Integrate Temporal and Redis with the hotel search API.
+- [x] Add API validation and error handling.
+- [x] Configure Docker Compose.
+- [x] Verify Dockerized end-to-end hotel search.
 
-### Pending
+### Remaining
 
-- [ ] Configure Temporal workflows and activities.
-- [ ] Implement supplier orchestration and hotel aggregation.
-- [ ] Implement hotel deduplication and cheapest-offer selection.
-- [ ] Integrate Redis with the hotel search API.
-- [ ] Add error handling and health checks.
-- [ ] Configure Docker Compose.
-- [ ] Prepare Postman collection.
-- [ ] Complete deployment and setup documentation.
+- [ ] Prepare Postman collection covering successful aggregation, filtering, empty results, and supplier failure scenarios.
+- [ ] Complete final review and submit the feature branch PR.
 
-## 10. Implementation Guidelines
+## 12. Implementation Guidelines
 
 - Use TypeScript interfaces for shared data structures.
 - Keep controllers focused on HTTP handling.
-- Keep external I/O inside Temporal activities.
+- Keep external supplier I/O inside Temporal activities.
 - Ensure Temporal workflows remain deterministic.
-- Make activities safe to retry where practical.
+- Configure retries for supplier activities.
 - Perform price filtering inside Redis.
-- Add comments around important functions and business logic.
+- Keep comments focused on important business logic.
 - Avoid unnecessary abstractions and dependencies.
-
-## 11. Testing Strategy
-
-Automated tests are written using Vitest.
-
-### Redis Repository Tests
-
-The Redis repository tests cover:
-
-- Saving and retrieving hotel offers.
-- Retrieving offers using minimum price.
-- Retrieving offers using maximum price.
-- Applying minimum and maximum price together.
-- Handling empty search results.
-- Keeping city data isolated.
-- Replacing previously cached data during refresh.
-- Detecting cache misses and cached empty snapshots.
-
-Integration tests use a separate Redis database to avoid interfering with application data.
-
-### API Tests
-
-The Postman collection will cover:
-
-- Successful hotel search.
-- Duplicate hotel resolution.
-- Single-supplier hotel results.
-- Price filtering.
-- Empty results.
-- Supplier failure scenarios.

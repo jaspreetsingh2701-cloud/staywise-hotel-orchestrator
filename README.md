@@ -2,19 +2,19 @@
 
 A backend service that aggregates hotel offers from multiple suppliers, compares prices, and returns the cheapest available offer for each hotel.
 
-Built with Node.js, TypeScript, Express, Temporal, and Redis.
+Built with Node.js, TypeScript, Express, Temporal, Redis, and Docker Compose.
 
 ## Features
 
 - Fetch hotel offers from two mock suppliers.
-- Execute supplier requests in parallel using Temporal.
-- Deduplicate hotels by name.
+- Execute supplier requests concurrently using Temporal.
+- Deduplicate hotels by normalized name.
 - Select the lowest-priced offer when multiple suppliers return the same hotel.
 - Preserve hotels available from only one supplier.
 - Store aggregated results in Redis.
 - Filter hotels by minimum and maximum price directly inside Redis.
 - Cache hotel offers with a five-minute expiration.
-- Docker-based local environment.
+- Run the application and supporting services using Docker Compose.
 - Automated tests using Vitest.
 
 ## Tech Stack
@@ -24,12 +24,11 @@ Built with Node.js, TypeScript, Express, Temporal, and Redis.
 | Node.js | Runtime |
 | TypeScript | Application language |
 | Express.js | REST API framework |
-| Temporal.io | Workflow orchestration |
+| Temporal | Workflow orchestration |
 | Redis | Hotel offer storage and price filtering |
 | Docker | Containerization |
-| Docker Compose | Container orchestration |
+| Docker Compose | Service orchestration |
 | Vitest | Automated testing |
-| Postman | API testing |
 
 ## API Endpoints
 
@@ -41,168 +40,209 @@ Built with Node.js, TypeScript, Express, Temporal, and Redis.
 | GET | `/supplierB/hotels?city=delhi` | Mock Supplier B API |
 | GET | `/health` | Application health check |
 
-## Project Structure
+### Query Parameters
 
-    staywise-hotel-orchestrator/
-    ├── src/
-    │   ├── redis/
-    │   │   └── hotel.repository.ts
-    │   ├── suppliers/
-    │   │   ├── supplier.routes.ts
-    │   │   └── supplier.data.ts
-    │   └── server.ts
-    ├── tests/
-    │   └── redis/
-    │       └── hotel.repository.test.ts
-    ├── docs/
-    │   └── PROJECT.md
-    ├── .env.example
-    ├── package.json
-    ├── tsconfig.json
-    └── README.md
+| Parameter | Required | Description |
+|---|---|---|
+| `city` | Yes | City for hotel search |
+| `minPrice` | No | Minimum acceptable hotel price |
+| `maxPrice` | No | Maximum acceptable hotel price |
 
-The project structure will expand as Temporal workflows, activities, and API integration are implemented.
+The hotel search response contains `city`, `count`, and `hotels`.
+
+Each hotel contains:
+
+- `name`
+- `price`
+- `supplier`
+- `commissionPct`
 
 ## Getting Started
 
 ### Prerequisites
 
-- Node.js
-- npm
+- Git
 - Docker Desktop
 
 ### Installation
 
-Clone the repository and install dependencies:
+Clone the repository:
 
-    git clone https://github.com/jaspreetsingh2701-cloud/staywise-hotel-orchestrator.git
-    cd staywise-hotel-orchestrator
-    npm install
+```bash
+git clone https://github.com/jaspreetsingh2701-cloud/staywise-hotel-orchestrator.git
+cd staywise-hotel-orchestrator
+```
 
 ### Environment Configuration
 
-Create a `.env` file in the project root using `.env.example` as a reference.
+Create a `.env` file using `.env.example` as a reference.
 
-    PORT=3000
-    REDIS_URL=redis://localhost:6379
-    TEMPORAL_ADDRESS=localhost:7233
-    REDIS_TEST_URL=redis://localhost:6379/15
+| Variable | Purpose |
+|---|---|
+| `PORT` | Express API port |
+| `SUPPLIER_API_URL` | Base URL used by supplier activities |
+| `REDIS_URL` | Redis connection URL |
+| `TEMPORAL_ADDRESS` | Temporal server address |
 
-### Start Redis Using Docker
+### Start the Application
 
-Start a local Redis container:
+Start all services using Docker Compose:
 
-    docker run -d --name staywise-redis -p 6379:6379 redis:7-alpine
+```bash
+docker compose up --build -d
+```
 
-Verify the Redis connection:
+Docker Compose starts four services:
 
-    docker exec -it staywise-redis redis-cli PING
+| Service | Port | Purpose |
+|---|---:|---|
+| API | 3000 | Express REST API |
+| Redis | 6379 | Offer storage and price filtering |
+| Temporal | 7233 | Workflow orchestration |
+| Temporal UI | 8233 | Workflow monitoring |
+| Worker | Internal | Executes Temporal workflows |
 
-Expected response:
+API base URL: `http://localhost:3000`
 
-    PONG
+Temporal UI: `http://localhost:8233`
 
-If the container already exists, start it using:
+Check service status:
 
-    docker start staywise-redis
+```bash
+docker compose ps
+```
 
-### Run the Application
+View application logs:
 
-Start the development server:
+```bash
+docker compose logs --tail=50
+```
 
-    npm run dev
+Stop the environment:
 
-The API will be available at:
+```bash
+docker compose down
+```
 
-    http://localhost:3000
+### Example Requests
 
-### Run Tests
+Get aggregated hotel offers:
 
-Execute the automated test suite:
+```bash
+curl "http://localhost:3000/api/hotels?city=delhi"
+```
 
-    npm test
+Filter offers by price:
 
-Run tests in watch mode:
+```bash
+curl "http://localhost:3000/api/hotels?city=delhi&minPrice=5000&maxPrice=6000"
+```
 
-    npm run test:watch
+Example response:
 
-### Production Build
+```json
+{
+  "city": "delhi",
+  "count": 2,
+  "hotels": [
+    {
+      "name": "Holtin",
+      "price": 5340,
+      "supplier": "Supplier B",
+      "commissionPct": 20
+    },
+    {
+      "name": "Radison",
+      "price": 5900,
+      "supplier": "Supplier A",
+      "commissionPct": 13
+    }
+  ]
+}
+```
 
-Compile the TypeScript application:
+## Architecture Overview
 
-    npm run build
+The hotel search request follows this flow:
+
+1. Express receives and validates the request.
+2. Redis is checked for an existing city snapshot.
+3. On a cache miss, Express starts a Temporal workflow.
+4. Temporal executes both supplier activities concurrently.
+5. Supplier responses are combined and deduplicated.
+6. The cheapest offer is retained for each hotel.
+7. Aggregated offers are stored in Redis.
+8. Redis applies the requested price filters.
+9. Express returns the response.
+
+The Temporal worker runs separately from the API process.
 
 ## Redis Implementation
 
-Redis stores aggregated hotel offers so that subsequent requests can retrieve cached data without repeatedly calling supplier APIs.
+Redis stores aggregated hotel offers so subsequent requests can retrieve cached results without repeatedly calling supplier APIs.
 
 The implementation uses:
 
-- **Sorted Sets (ZSET):** Store normalized hotel names with hotel prices as scores.
+- **Sorted Sets (ZSET):** Store normalized hotel names with prices as scores.
 - **Hashes:** Store complete hotel offer details as JSON.
-- **Metadata keys:** Identify whether a city has a cached snapshot, including when the result contains zero hotels.
+- **Metadata keys:** Identify whether a cached snapshot exists, including when the result contains zero hotels.
 - **ZRANGEBYSCORE:** Perform minimum and maximum price filtering directly inside Redis.
 - **Redis transactions:** Group cache replacement operations.
-- **TTL:** Expire all snapshot keys after 300 seconds (5 minutes).
+- **TTL:** Expire snapshot keys after 300 seconds (5 minutes).
 
 Each city has independent Redis keys.
 
-For example:
+Example:
 
-    staywise:hotels:delhi:prices
-    staywise:hotels:delhi:details
-    staywise:hotels:delhi:metadata
+```text
+staywise:hotels:delhi:prices
+staywise:hotels:delhi:details
+staywise:hotels:delhi:metadata
+```
 
 The `HotelRepository` provides:
 
-- `saveHotels(city, hotels)` – stores or replaces hotel offers for a city.
-- `getHotels(city, filters)` – retrieves hotel offers with optional Redis-side price filtering.
-- `hasSnapshot(city)` – checks whether a cached snapshot exists, even if it contains no hotels.
+- `saveHotels(city, hotels)` – stores or replaces hotel offers.
+- `getHotels(city, filters)` – retrieves offers with optional Redis-side price filtering.
+- `hasSnapshot(city)` – checks whether a cached snapshot exists, including an empty result.
 
-The metadata key distinguishes a cache miss from a cached empty result. This prevents unnecessary supplier calls when a city has already been searched and no hotels were found.
+The metadata key distinguishes a cache miss from a cached empty result.
 
 Price filtering is performed inside Redis rather than retrieving all records and filtering them in application code.
 
-Automated tests cover:
+## Testing
 
-- Saving and retrieving hotel offers.
-- Minimum price filtering.
-- Maximum price filtering.
-- Combined price filtering.
-- Empty search results.
-- City isolation.
-- Cache refresh behaviour.
-- Cache snapshot detection.
+Run automated tests:
 
-## API Testing
+```bash
+npm test
+```
 
-A Postman collection will be provided in the `postman/` directory.
+Run tests in watch mode:
 
-The collection will cover:
+```bash
+npm run test:watch
+```
 
-- Successful hotel aggregation.
-- Duplicate hotel resolution using the lowest price.
-- Hotels available from only one supplier.
-- Minimum price filtering.
-- Maximum price filtering.
-- Combined price filtering.
-- Empty search results.
-- Supplier failure scenarios.
+Build the TypeScript application:
+
+```bash
+npm run build
+```
 
 ## Documentation
 
 See [Project Documentation](docs/PROJECT.md) for:
 
 - Assignment requirements.
-- System architecture.
+- System architecture and workflow.
 - API specifications.
-- Supplier integration.
 - Temporal orchestration.
 - Redis storage and price filtering.
-- Error handling.
-- Development milestones.
+- Docker environment.
 - Testing strategy.
+- Implementation status.
 
 ## License
 
-This project is intended as a technical assignment and demonstration of backend development, API integration, caching, and workflow orchestration.
+This project is intended as a technical assignment demonstrating backend development, API integration, caching, workflow orchestration, and containerization.
