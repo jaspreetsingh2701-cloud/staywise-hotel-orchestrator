@@ -1,12 +1,14 @@
+import "dotenv/config";
+
 import express from "express";
-import dotenv from "dotenv";
 
 import supplierRoutes from "./suppliers/supplier.routes";
-
-dotenv.config();
+import { createHotelRouter } from "./hotels/hotel.routes";
+import redisClient from "./redis/redis.client";
+import { HotelRepository } from "./redis/hotel.repository";
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = Number(process.env.PORT ?? 3000);
 
 app.use(express.json());
 
@@ -20,6 +22,19 @@ app.get("/health", (_req, res) => {
 // Mock supplier endpoints.
 app.use(supplierRoutes);
 
-app.listen(PORT, () => {
-  console.log(`StayWise API running on port ${PORT}`);
+async function startServer() {
+  await redisClient.connect();
+
+  const hotelRepository = new HotelRepository(redisClient);
+
+  app.use("/api/hotels", createHotelRouter(hotelRepository));
+
+  app.listen(PORT, () => {
+    console.log(`StayWise API running on port ${PORT}`);
+  });
+}
+
+startServer().catch((error) => {
+  console.error("Failed to start StayWise API:", error);
+  process.exit(1);
 });

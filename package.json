@@ -11,7 +11,9 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "temporal:worker": "tsx src/temporal/worker.ts",
+    "temporal:search": "tsx src/temporal/run-hotel-search.ts"
   },
   "repository": {
     "type": "git",
