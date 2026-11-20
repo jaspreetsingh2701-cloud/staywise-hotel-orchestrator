@@ -3,3 +3,8 @@ dist/
 .env
 .DS_Store
 coverage/
+
+# Postman workspace metadata
+.postman/
+postman/*
+!postman/StayWise.postman_collection.json

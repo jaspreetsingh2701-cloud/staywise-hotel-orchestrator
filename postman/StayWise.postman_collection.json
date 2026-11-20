@@ -1,0 +1,503 @@
+{
+  "info": {
+    "_postman_id": "ab5b7801-8bab-483d-8406-a3064d648c32",
+    "name": "StayWise - Hotel Offer Orchestrator",
+    "description": "API collection for testing hotel aggregation, supplier integration, Redis price filtering, and request validation.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "31550533",
+    "_collection_link": "https://go.postman.co/collection/31550533-ab5b7801-8bab-483d-8406-a3064d648c32?source=collection_link"
+  },
+  "item": [
+    {
+      "name": "Health Check",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Returns HTTP 200', function () {\n    pm.response.to.have.status(200);\n});\npm.test('API health status is OK', function () {\n    pm.expect(pm.response.json().status).to.eql('ok');\n});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/health",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "health"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Supplier A - Delhi Hotels",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Returns HTTP 200', function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "pm.test('Supplier A returns hotel offers', function () {",
+              "    const hotels = pm.response.json();",
+              "    pm.expect(hotels).to.be.an('array').that.is.not.empty;",
+              "    pm.expect(hotels.some(hotel => hotel.name === 'Holtin')).to.eql(true);",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/supplierA/hotels?city={{city}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "supplierA",
+            "hotels"
+          ],
+          "query": [
+            {
+              "key": "city",
+              "value": "{{city}}"
+            }
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Supplier B - Delhi Hotels",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Returns HTTP 200', function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "pm.test('Supplier B returns hotel offers', function () {",
+              "    const hotels = pm.response.json();",
+              "    pm.expect(hotels).to.be.an('array').that.is.not.empty;",
+              "    pm.expect(hotels.some(hotel => hotel.name === 'Lemon Tree')).to.eql(true);",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/supplierB/hotels?city={{city}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "supplierB",
+            "hotels"
+          ],
+          "query": [
+            {
+              "key": "city",
+              "value": "{{city}}"
+            }
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Hotel Search - Aggregation and Deduplication",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Returns HTTP 200', function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "const response = pm.response.json();",
+              "pm.test('Returns four aggregated hotels', function () {",
+              "    pm.expect(response.count).to.eql(4);",
+              "    pm.expect(response.hotels).to.have.lengthOf(4);",
+              "});",
+              "pm.test('Holtin uses the cheapest Supplier B offer', function () {",
+              "    const hotel = response.hotels.find(item => item.name === 'Holtin');",
+              "    pm.expect(hotel).to.include({ price: 5340, supplier: 'Supplier B', commissionPct: 20 });",
+              "});",
+              "pm.test('Radison uses the cheapest Supplier A offer', function () {",
+              "    const hotel = response.hotels.find(item => item.name === 'Radison');",
+              "    pm.expect(hotel).to.include({ price: 5900, supplier: 'Supplier A', commissionPct: 13 });",
+              "});",
+              "pm.test('Single-supplier hotels are retained', function () {",
+              "    pm.expect(response.hotels.some(item => item.name === 'Lemon Tree')).to.eql(true);",
+              "    pm.expect(response.hotels.some(item => item.name === 'Taj Palace')).to.eql(true);",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/hotels?city={{city}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "hotels"
+          ],
+          "query": [
+            {
+              "key": "city",
+              "value": "{{city}}"
+            }
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Hotel Search - Minimum Price",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Returns HTTP 200', function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "const response = pm.response.json();",
+              "pm.test('All returned hotels meet the minimum price', function () {",
+              "    pm.expect(response.hotels.every(hotel => hotel.price >= 5000)).to.eql(true);",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/hotels?city={{city}}&minPrice=5000",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "hotels"
+          ],
+          "query": [
+            {
+              "key": "city",
+              "value": "{{city}}"
+            },
+            {
+              "key": "minPrice",
+              "value": "5000"
+            }
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Hotel Search - Maximum Price",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Returns HTTP 200', function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "const response = pm.response.json();",
+              "pm.test('All returned hotels meet the maximum price', function () {",
+              "    pm.expect(response.hotels.every(hotel => hotel.price <= 6000)).to.eql(true);",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/hotels?city={{city}}&maxPrice=6000",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "hotels"
+          ],
+          "query": [
+            {
+              "key": "city",
+              "value": "{{city}}"
+            },
+            {
+              "key": "maxPrice",
+              "value": "6000"
+            }
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Hotel Search - Combined Price Filter",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Returns HTTP 200', function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "const response = pm.response.json();",
+              "pm.test('Returns exactly two matching hotels', function () {",
+              "    pm.expect(response.count).to.eql(2);",
+              "    pm.expect(response.hotels).to.have.lengthOf(2);",
+              "});",
+              "pm.test('All prices are within the inclusive range', function () {",
+              "    pm.expect(response.hotels.every(hotel => hotel.price >= 5000 && hotel.price <= 6000)).to.eql(true);",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/hotels?city={{city}}&minPrice=5000&maxPrice=6000",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "hotels"
+          ],
+          "query": [
+            {
+              "key": "city",
+              "value": "{{city}}"
+            },
+            {
+              "key": "minPrice",
+              "value": "5000"
+            },
+            {
+              "key": "maxPrice",
+              "value": "6000"
+            }
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Hotel Search - Empty Results",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Returns HTTP 200', function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "const response = pm.response.json();",
+              "pm.test('Returns an empty hotel list', function () {",
+              "    pm.expect(response.count).to.eql(0);",
+              "    pm.expect(response.hotels).to.be.an('array').that.is.empty;",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/hotels?city={{city}}&minPrice=15000",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "hotels"
+          ],
+          "query": [
+            {
+              "key": "city",
+              "value": "{{city}}"
+            },
+            {
+              "key": "minPrice",
+              "value": "15000"
+            }
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Hotel Search - Missing City",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Returns HTTP 400', function () {",
+              "    pm.response.to.have.status(400);",
+              "});",
+              "pm.test('Returns city validation error', function () {",
+              "    pm.expect(pm.response.json().error).to.eql('City query parameter is required');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/hotels",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "hotels"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Hotel Search - Invalid Price Range",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Returns HTTP 400', function () {",
+              "    pm.response.to.have.status(400);",
+              "});",
+              "pm.test('Returns price range validation error', function () {",
+              "    pm.expect(pm.response.json().error).to.eql('minPrice cannot exceed maxPrice');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/hotels?city={{city}}&minPrice=7000&maxPrice=5000",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "hotels"
+          ],
+          "query": [
+            {
+              "key": "city",
+              "value": "{{city}}"
+            },
+            {
+              "key": "minPrice",
+              "value": "7000"
+            },
+            {
+              "key": "maxPrice",
+              "value": "5000"
+            }
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Hotel Search - Invalid Price Value",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Returns HTTP 400', function () {",
+              "    pm.response.to.have.status(400);",
+              "});",
+              "pm.test('Returns price validation error', function () {",
+              "    pm.expect(pm.response.json().error).to.eql('Price filters must be valid non-negative numbers');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/hotels?city={{city}}&minPrice=invalid",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "hotels"
+          ],
+          "query": [
+            {
+              "key": "city",
+              "value": "{{city}}"
+            },
+            {
+              "key": "minPrice",
+              "value": "invalid"
+            }
+          ]
+        }
+      },
+      "response": []
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000"
+    },
+    {
+      "key": "city",
+      "value": "delhi"
+    }
+  ]
+}
