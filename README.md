@@ -48,7 +48,7 @@ Built with Node.js, TypeScript, Express, Temporal, Redis, and Docker Compose.
 | `minPrice` | No | Minimum acceptable hotel price |
 | `maxPrice` | No | Maximum acceptable hotel price |
 
-The hotel search response contains `city`, `count`, and `hotels`.
+The hotel search endpoint returns a JSON array of hotel offers.
 
 Each hotel contains:
 
@@ -98,9 +98,10 @@ Docker Compose starts four services:
 |---|---:|---|
 | API | 3000 | Express REST API |
 | Redis | 6379 | Offer storage and price filtering |
-| Temporal | 7233 | Workflow orchestration |
-| Temporal UI | 8233 | Workflow monitoring |
+| Temporal | 7233 | Workflow orchestration; UI available on port 8233 |
 | Worker | Internal | Executes Temporal workflows |
+
+> **Note:** Temporal runs in development mode for this assignment. A production deployment should use a properly configured Temporal persistence backend and production infrastructure.
 
 API base URL: `http://localhost:3000`
 
@@ -141,24 +142,20 @@ curl "http://localhost:3000/api/hotels?city=delhi&minPrice=5000&maxPrice=6000"
 Example response:
 
 ```json
-{
-  "city": "delhi",
-  "count": 2,
-  "hotels": [
-    {
-      "name": "Holtin",
-      "price": 5340,
-      "supplier": "Supplier B",
-      "commissionPct": 20
-    },
-    {
-      "name": "Radison",
-      "price": 5900,
-      "supplier": "Supplier A",
-      "commissionPct": 13
-    }
-  ]
-}
+[
+  {
+    "name": "Holtin",
+    "price": 5340,
+    "supplier": "Supplier B",
+    "commissionPct": 20
+  },
+  {
+    "name": "Radison",
+    "price": 5900,
+    "supplier": "Supplier A",
+    "commissionPct": 13
+  }
+]
 ```
 
 ## Architecture Overview
@@ -243,6 +240,6 @@ See [Project Documentation](docs/PROJECT.md) for:
 - Testing strategy.
 - Implementation status.
 
-## License
+## Project Scope
 
-This project is intended as a technical assignment demonstrating backend development, API integration, caching, workflow orchestration, and containerization.
+This project demonstrates backend development, API integration, caching, workflow orchestration, and containerization as part of a technical assignment.
